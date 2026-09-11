@@ -90,3 +90,31 @@ func (p *Publisher) Publish(ctx context.Context, message string) error {
 	}
 	return errors.Join(errs...)
 }
+
+// PublishMetrics fans a silent metrics push out to every registered device,
+// with the same per-device isolation and dead-token pruning as Publish: one
+// unreachable device must not stop the others from refreshing, and a token
+// Apple reports as gone is dropped rather than retried on every poll forever.
+func (p *Publisher) PublishMetrics(ctx context.Context, m WidgetMetrics) error {
+	registrations := p.allFn()
+	if len(registrations) == 0 {
+		return nil // nothing registered is normal, not a failure
+	}
+	m.ServerName = p.serverName
+
+	var errs []error
+	for _, r := range registrations {
+		err := p.client.SendMetrics(ctx, r.Token, r.Environment, m)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrTokenUnregistered):
+			if p.removeFn != nil {
+				_ = p.removeFn(r.Token)
+			}
+			errs = append(errs, fmt.Errorf("%s is no longer reachable and was unregistered", r.DisplayLabel()))
+		default:
+			errs = append(errs, fmt.Errorf("%s: %w", r.DisplayLabel(), err))
+		}
+	}
+	return errors.Join(errs...)
+}

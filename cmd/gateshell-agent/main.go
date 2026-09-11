@@ -254,6 +254,7 @@ func newServeCmd(loadConfig func() (config.Config, error)) *cobra.Command {
 			var publisher alerts.Publisher
 			var pushTokens api.PushTokenStore
 			var pushTester api.PushTester
+			var widgetNotifier *pushrelay.WidgetNotifier
 			if cfg.PushRelayToken != "" {
 				relayClient, err := pushrelay.NewClient(cfg.PushRelayURL, cfg.PushRelayToken)
 				if err != nil {
@@ -268,6 +269,11 @@ func newServeCmd(loadConfig func() (config.Config, error)) *cobra.Command {
 				publisher = relayPublisher
 				pushTokens = tokenStore
 				pushTester = relayPublisher
+				// Silent metrics pushes keep the iOS Health widget current
+				// while the app is closed; without them it only ever showed
+				// what a foreground metrics tick last wrote.
+				widgetNotifier = pushrelay.NewWidgetNotifier(
+					relayPublisher.PublishMetrics, pushrelay.DefaultWidgetInterval)
 			}
 
 			evaluator := alerts.NewEvaluator(publisher, logger)
@@ -304,6 +310,17 @@ func newServeCmd(loadConfig func() (config.Config, error)) *cobra.Command {
 			}))
 			coll.AddSink(collector.SinkFunc(apiServer.BroadcastSample))
 			coll.AddSink(evaluator)
+			if widgetNotifier != nil {
+				coll.AddSink(collector.SinkFunc(func(sample collector.Sample) {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					// Throttled internally: most ticks return immediately
+					// without touching the network.
+					if _, err := widgetNotifier.Notify(ctx, cfg.ServerName, sample); err != nil {
+						logger.Warn("widget metrics push failed", "error", err)
+					}
+				}))
+			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()

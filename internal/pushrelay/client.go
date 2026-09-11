@@ -91,6 +91,27 @@ func (c *Client) Send(ctx context.Context, deviceToken, environment, title, body
 	})
 }
 
+// SendMetrics delivers a silent, user-invisible push carrying one sample, so
+// the iOS Health widget can refresh on this agent's poll cycle instead of only
+// when the app is open. Separate endpoint from Send because the relay has to
+// use different APNs semantics (background push type, priority 5, no alert).
+func (c *Client) SendMetrics(ctx context.Context, deviceToken, environment string, m WidgetMetrics) error {
+	payload := map[string]any{
+		"deviceToken": deviceToken,
+		"environment": NormalizeEnvironment(environment),
+		"serverName":  m.ServerName,
+		"cpuPercent":  m.CPUPercent,
+		"capturedAt":  m.CapturedAt.Unix(),
+	}
+	if m.MemoryPercent != nil {
+		payload["memoryPercent"] = *m.MemoryPercent
+	}
+	if m.DiskUsePercent != nil {
+		payload["diskUsePercent"] = *m.DiskUsePercent
+	}
+	return c.post(ctx, "/api/push/metrics", payload)
+}
+
 func (c *Client) post(ctx context.Context, path string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
