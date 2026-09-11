@@ -25,7 +25,7 @@ func TestNotifyDerivesPercentagesFromTheSample(t *testing.T) {
 	n := NewWidgetNotifier(func(_ context.Context, m WidgetMetrics) error {
 		got = m
 		return nil
-	}, time.Minute)
+	}, func() time.Duration { return time.Minute })
 
 	sent, err := n.Notify(context.Background(), "api-prod-01", sample())
 	if err != nil || !sent {
@@ -53,7 +53,7 @@ func TestNotifyOmitsPercentagesWithoutATotal(t *testing.T) {
 	n := NewWidgetNotifier(func(_ context.Context, m WidgetMetrics) error {
 		got = m
 		return nil
-	}, time.Minute)
+	}, func() time.Duration { return time.Minute })
 
 	s := sample()
 	s.MemTotalMB = 0
@@ -74,7 +74,7 @@ func TestNotifyThrottlesWithinTheInterval(t *testing.T) {
 	n := NewWidgetNotifier(func(context.Context, WidgetMetrics) error {
 		calls++
 		return nil
-	}, 15*time.Minute)
+	}, func() time.Duration { return 15 * time.Minute })
 	base := time.Unix(1_700_000_000, 0)
 	n.now = func() time.Time { return base }
 
@@ -107,7 +107,7 @@ func TestFailedSendDoesNotConsumeTheInterval(t *testing.T) {
 			return errors.New("relay down")
 		}
 		return nil
-	}, 15*time.Minute)
+	}, func() time.Duration { return 15 * time.Minute })
 	base := time.Unix(1_700_000_000, 0)
 	n.now = func() time.Time { return base }
 
@@ -124,10 +124,33 @@ func TestFailedSendDoesNotConsumeTheInterval(t *testing.T) {
 	}
 }
 
-func TestZeroIntervalFallsBackToTheDefault(t *testing.T) {
-	n := NewWidgetNotifier(func(context.Context, WidgetMetrics) error { return nil }, 0)
-	if n.interval != DefaultWidgetInterval {
-		t.Fatalf("interval = %v, want %v", n.interval, DefaultWidgetInterval)
+func TestIntervalFollowsThePollIntervalAboveTheFloor(t *testing.T) {
+	poll := 30 * time.Minute
+	n := NewWidgetNotifier(func(context.Context, WidgetMetrics) error { return nil },
+		func() time.Duration { return poll })
+	if got := n.Interval(); got != 30*time.Minute {
+		t.Fatalf("Interval() = %v, want the configured 30m", got)
+	}
+	// A change from the app takes effect without a restart.
+	poll = 20 * time.Minute
+	if got := n.Interval(); got != 20*time.Minute {
+		t.Fatalf("Interval() = %v, want 20m after the poll interval changed", got)
+	}
+}
+
+// A fast collector must not spend the device's background-push budget.
+func TestIntervalIsFlooredForFastPolling(t *testing.T) {
+	n := NewWidgetNotifier(func(context.Context, WidgetMetrics) error { return nil },
+		func() time.Duration { return 15 * time.Second })
+	if got := n.Interval(); got != MinWidgetInterval {
+		t.Fatalf("Interval() = %v, want the %v floor", got, MinWidgetInterval)
+	}
+}
+
+func TestNilPollIntervalFallsBackToTheFloor(t *testing.T) {
+	n := NewWidgetNotifier(func(context.Context, WidgetMetrics) error { return nil }, nil)
+	if got := n.Interval(); got != MinWidgetInterval {
+		t.Fatalf("Interval() = %v, want %v", got, MinWidgetInterval)
 	}
 }
 
@@ -156,7 +179,7 @@ func TestNoDevicesDoesNotConsumeTheInterval(t *testing.T) {
 			return ErrNoDevices
 		}
 		return nil
-	}, 15*time.Minute)
+	}, func() time.Duration { return 15 * time.Minute })
 	base := time.Unix(1_700_000_000, 0)
 	n.now = func() time.Time { return base }
 

@@ -274,9 +274,10 @@ func newServeCmd(loadConfig func() (config.Config, error)) *cobra.Command {
 				// while the app is closed; without them it only ever showed
 				// what a foreground metrics tick last wrote.
 				widgetNotifier = pushrelay.NewWidgetNotifier(
-					relayPublisher.PublishMetrics, pushrelay.DefaultWidgetInterval)
+					relayPublisher.PublishMetrics, coll.Interval)
 				logger.Info("widget metrics push enabled",
-					"interval", pushrelay.DefaultWidgetInterval.String(),
+					"interval", widgetNotifier.Interval().String(),
+					"floor", pushrelay.MinWidgetInterval.String(),
 					"relay", cfg.PushRelayURL)
 			}
 

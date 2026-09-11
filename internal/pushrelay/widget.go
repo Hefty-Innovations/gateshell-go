@@ -9,15 +9,15 @@ import (
 	"github.com/Hefty-Innovations/gateshell-go/internal/collector"
 )
 
-// DefaultWidgetInterval is how often, at most, a silent metrics push goes out.
+// MinWidgetInterval is the floor on how often a silent metrics push goes out,
+// regardless of how fast the collector is polling.
 //
-// It is deliberately much coarser than the collection interval. Apple budgets
-// background (`content-available`) pushes per app per device and throttles an
-// app that spends them faster than the user actually looks at it; a 15s
-// collector pushing every sample would burn that budget within minutes and get
-// later pushes dropped -- including, potentially, ones the user would have
-// wanted. Fifteen minutes keeps a home-screen widget honest without abusing it.
-const DefaultWidgetInterval = 15 * time.Minute
+// Apple budgets background (`content-available`) pushes per app per device and
+// throttles an app that spends them faster than the user actually looks at it.
+// A 15s collector pushing every sample would burn that budget within minutes
+// and get later pushes dropped -- including ones the user would have wanted.
+// Ten minutes caps it at six per hour, which a widget can spend honestly.
+const MinWidgetInterval = 10 * time.Minute
 
 // WidgetMetrics is the subset of a Sample worth waking a phone for: the three
 // numbers the Health widget actually renders, plus when they were taken.
@@ -36,22 +36,36 @@ type WidgetMetrics struct {
 // froze the moment the app was closed, regardless of how often this agent
 // polled. These pushes let the agent's own cycle drive it.
 type WidgetNotifier struct {
-	publish  func(ctx context.Context, m WidgetMetrics) error
-	interval time.Duration
-	now      func() time.Time
+	publish func(ctx context.Context, m WidgetMetrics) error
+	// Read fresh on every sample so a poll-interval change from the app takes
+	// effect without a restart -- the same contract Collector.Run has.
+	pollInterval func() time.Duration
+	now          func() time.Time
 
 	mu       sync.Mutex
 	lastSent time.Time
 }
 
+// NewWidgetNotifier follows pollInterval so the widget tracks the cadence the
+// user configured, never faster than MinWidgetInterval.
 func NewWidgetNotifier(
 	publish func(ctx context.Context, m WidgetMetrics) error,
-	interval time.Duration,
+	pollInterval func() time.Duration,
 ) *WidgetNotifier {
-	if interval <= 0 {
-		interval = DefaultWidgetInterval
+	if pollInterval == nil {
+		pollInterval = func() time.Duration { return MinWidgetInterval }
 	}
-	return &WidgetNotifier{publish: publish, interval: interval, now: time.Now}
+	return &WidgetNotifier{publish: publish, pollInterval: pollInterval, now: time.Now}
+}
+
+// Interval is the effective push cadence: the configured poll interval, floored
+// at MinWidgetInterval.
+func (w *WidgetNotifier) Interval() time.Duration {
+	d := w.pollInterval()
+	if d < MinWidgetInterval {
+		return MinWidgetInterval
+	}
+	return d
 }
 
 // Notify sends at most one push per interval. It reports whether it sent, so
@@ -61,9 +75,11 @@ func (w *WidgetNotifier) Notify(ctx context.Context, serverName string, s collec
 		return false, nil
 	}
 
+	interval := w.Interval()
+
 	w.mu.Lock()
 	now := w.now()
-	if !w.lastSent.IsZero() && now.Sub(w.lastSent) < w.interval {
+	if !w.lastSent.IsZero() && now.Sub(w.lastSent) < interval {
 		w.mu.Unlock()
 		return false, nil
 	}
