@@ -130,3 +130,41 @@ func TestZeroIntervalFallsBackToTheDefault(t *testing.T) {
 		t.Fatalf("interval = %v, want %v", n.interval, DefaultWidgetInterval)
 	}
 }
+
+// "Nobody registered" must not read as "delivered": the two are
+// indistinguishable to a caller that only checks for a nil error, and that is
+// precisely what makes a silent push pipeline undebuggable from outside.
+func TestPublishMetricsReportsWhenNoDeviceIsRegistered(t *testing.T) {
+	p := NewPublisher(nil, "srv",
+		func() []Registration { return nil },
+		func(string) error { return nil },
+		func(string) (Registration, bool) { return Registration{}, false },
+	)
+	err := p.PublishMetrics(context.Background(), WidgetMetrics{})
+	if !errors.Is(err, ErrNoDevices) {
+		t.Fatalf("PublishMetrics() with no registrations = %v; want ErrNoDevices", err)
+	}
+}
+
+// A skip must not burn the interval either -- otherwise the first device to
+// register waits a full cycle for no reason.
+func TestNoDevicesDoesNotConsumeTheInterval(t *testing.T) {
+	calls := 0
+	n := NewWidgetNotifier(func(context.Context, WidgetMetrics) error {
+		calls++
+		if calls == 1 {
+			return ErrNoDevices
+		}
+		return nil
+	}, 15*time.Minute)
+	base := time.Unix(1_700_000_000, 0)
+	n.now = func() time.Time { return base }
+
+	if _, err := n.Notify(context.Background(), "srv", sample()); !errors.Is(err, ErrNoDevices) {
+		t.Fatalf("first Notify = %v; want ErrNoDevices", err)
+	}
+	sent, err := n.Notify(context.Background(), "srv", sample())
+	if err != nil || !sent {
+		t.Fatalf("second Notify = %v, %v; want true, nil", sent, err)
+	}
+}

@@ -38,6 +38,11 @@ import (
 // GATESHELL_AGENT_PUSH_RELAY_URL.
 const DefaultBaseURL = "https://gateshell.com"
 
+// ErrNoDevices reports that no device has registered for push with this
+// agent, so there was nothing to deliver. Not a failure -- but not a
+// delivery either, and callers log the two differently.
+var ErrNoDevices = errors.New("pushrelay: no device registered")
+
 // ErrTokenUnregistered means APNs considers this device token permanently
 // dead -- the app was deleted, or the token was replaced. The caller should
 // drop it rather than retry.

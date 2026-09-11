@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -274,6 +275,13 @@ func newServeCmd(loadConfig func() (config.Config, error)) *cobra.Command {
 				// what a foreground metrics tick last wrote.
 				widgetNotifier = pushrelay.NewWidgetNotifier(
 					relayPublisher.PublishMetrics, pushrelay.DefaultWidgetInterval)
+				logger.Info("widget metrics push enabled",
+					"interval", pushrelay.DefaultWidgetInterval.String(),
+					"relay", cfg.PushRelayURL)
+			}
+
+			if widgetNotifier == nil {
+				logger.Info("widget metrics push disabled: no push relay token configured")
 			}
 
 			evaluator := alerts.NewEvaluator(publisher, logger)
@@ -316,8 +324,16 @@ func newServeCmd(loadConfig func() (config.Config, error)) *cobra.Command {
 					defer cancel()
 					// Throttled internally: most ticks return immediately
 					// without touching the network.
-					if _, err := widgetNotifier.Notify(ctx, cfg.ServerName, sample); err != nil {
+					sent, err := widgetNotifier.Notify(ctx, cfg.ServerName, sample)
+					switch {
+					case errors.Is(err, pushrelay.ErrNoDevices):
+						// Expected until a device opens the app and registers.
+						logger.Debug("widget metrics push skipped: no device registered")
+					case err != nil:
 						logger.Warn("widget metrics push failed", "error", err)
+					case sent:
+						logger.Info("widget metrics pushed",
+							"cpu", sample.CPUPercent, "captured_at", sample.Timestamp)
 					}
 				}))
 			}

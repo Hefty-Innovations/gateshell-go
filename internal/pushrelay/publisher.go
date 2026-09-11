@@ -98,7 +98,11 @@ func (p *Publisher) Publish(ctx context.Context, message string) error {
 func (p *Publisher) PublishMetrics(ctx context.Context, m WidgetMetrics) error {
 	registrations := p.allFn()
 	if len(registrations) == 0 {
-		return nil // nothing registered is normal, not a failure
+		// Distinct from success: "nobody is listening" and "delivered" look
+		// identical to a caller that only checks for a nil error, and that
+		// ambiguity is exactly what makes a silent push pipeline impossible
+		// to debug from the outside.
+		return ErrNoDevices
 	}
 	m.ServerName = p.serverName
 
